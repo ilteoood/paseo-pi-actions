@@ -39,8 +39,8 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/AGENTS.md \
             -o "$HOME/.pi/agent/AGENTS.md"
           curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/pi-agent.sh \
-            | grep -v '^paseo daemon run$' > "$RUNNER_TEMP/pi-agent-deps.sh"
-          if grep -q 'daemon run' "$RUNNER_TEMP/pi-agent-deps.sh"; then
+            | grep -vE '^[[:space:]]*(sudo )?paseo daemon([[:space:]]|$)' > "$RUNNER_TEMP/pi-agent-deps.sh"
+          if grep -qE 'paseo daemon' "$RUNNER_TEMP/pi-agent-deps.sh"; then
             echo "::error::the harness script still boots the daemon; it was not stripped"
             exit 1
           fi
