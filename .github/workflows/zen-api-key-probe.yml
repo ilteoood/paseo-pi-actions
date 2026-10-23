@@ -1,0 +1,63 @@
+name: zen-api-key-probe (throwaway)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pi and the Zen provider
+        run: |
+          set -euo pipefail
+          npm i -g --ignore-scripts @earendil-works/pi-coding-agent@1.4.0
+          pi install npm:opencode-zen-oauth@1.2.11
+          pi --version
+
+      - name: A clean agent dir, no auth.json, no models-store.json
+        run: |
+          set -euo pipefail
+          find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+          test ! -f "$PI_CODING_AGENT_DIR/auth.json" && echo "auth.json: absent"
+          test ! -f "$PI_CODING_AGENT_DIR/models-store.json" && echo "models-store.json: absent"
+
+      - name: The catalog the key reaches
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          timeout 120 pi --list-models > "$RUNNER_TEMP/models.txt" || true
+          echo "--- opencode-zen entries ---"
+          grep -i "opencode-zen" "$RUNNER_TEMP/models.txt" || echo "(none)"
+          echo "zen entries: $(grep -ci 'opencode-zen' "$RUNNER_TEMP/models.txt" || true)"
+          echo "total entries: $(grep -c . "$RUNNER_TEMP/models.txt" || true)"
+          find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+
+      - name: A real turn on the key
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -uo pipefail
+          timeout 180 pi --print --approve --model opencode-zen/glm-5.3-flash "reply with ok" \
+            > "$RUNNER_TEMP/turn.out" 2> "$RUNNER_TEMP/turn.err"
+          echo "exit=$?"
+          echo "--- stdout ---"; cat "$RUNNER_TEMP/turn.out"
+          echo "--- stderr ---"; cat "$RUNNER_TEMP/turn.err"
+          echo "--- agent dir after the turn ---"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+
+      - name: What a rejected key looks like
+        run: |
+          set -uo pipefail
+          OPENCODE_API_KEY=oc_sk_0000000000000000000000000000 \
+          timeout 120 pi --print --approve --model opencode-zen/glm-5.3-flash "reply with ok" \
+            > "$RUNNER_TEMP/bogus.out" 2> "$RUNNER_TEMP/bogus.err"
+          echo "exit=$?"
+          echo "--- stdout ---"; cat "$RUNNER_TEMP/bogus.out"
+          echo "--- stderr ---"; cat "$RUNNER_TEMP/bogus.err"
