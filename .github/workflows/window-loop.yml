@@ -6,10 +6,6 @@ on:
       target_repo:
         description: owner/repo the window clones, works in and pushes to
         required: true
-      brief:
-        description: prose the window starts with
-        required: false
-        default: ""
 
 jobs:
   window:
@@ -106,7 +102,6 @@ jobs:
         run: |
           echo "the window is open; steer from the app"
           echo "target: ${{ inputs.target_repo }}"
-          echo "brief: ${{ inputs.brief }}"
           sleep 4500
 
       - name: Daemon log tail
