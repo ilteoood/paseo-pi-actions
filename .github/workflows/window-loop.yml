@@ -15,6 +15,9 @@ run-name: window-1 ${{ inputs.target_repo }}
 
 jobs:
   window:
+    defaults:
+      run:
+        shell: bash
     runs-on: ubuntu-latest
     container:
       image: node:22-bookworm
