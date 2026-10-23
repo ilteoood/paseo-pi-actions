@@ -1,0 +1,114 @@
+name: window-loop (throwaway)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: owner/repo the window clones, works in and pushes to
+        required: true
+      brief:
+        description: prose the window starts with
+        required: false
+        default: ""
+
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install paseo, pi and the Zen provider
+        run: |
+          set -euo pipefail
+          npm i -g --ignore-scripts @getpaseo/cli@0.12.0 @earendil-works/pi-coding-agent@1.4.0
+          pi install npm:opencode-zen-oauth@1.2.11
+          pi --version
+          paseo --version
+
+      - name: Restore the daemon identity
+        env:
+          SERVER_ID_B64: ${{ secrets.PASEO_SERVER_ID_B64 }}
+          KEYPAIR_B64: ${{ secrets.PASEO_DAEMON_KEYPAIR_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.paseo" && chmod 700 "$HOME/.paseo"
+          printf '%s' "$SERVER_ID_B64" | base64 -d > "$HOME/.paseo/server-id"
+          printf '%s' "$KEYPAIR_B64" | base64 -d > "$HOME/.paseo/daemon-keypair.json"
+          chmod 600 "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
+
+      - name: Generate the pi config
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path(os.path.expanduser("~/.pi/agent/settings.json"))
+          settings = json.loads(path.read_text())
+          settings["defaultProjectTrust"] = "always"
+          path.write_text(json.dumps(settings, indent=2) + "\n")
+          PY
+          cat "$HOME/.pi/agent/settings.json"
+
+      - name: Clone the target repo
+        env:
+          TARGET_REPO_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target/$TARGET_REPO"
+          mkdir -p "$(dirname "$target")"
+          git clone --quiet "https://x-access-token:${TARGET_REPO_TOKEN}@github.com/${TARGET_REPO}.git" "$target"
+          git -C "$target" config user.name "paseo window"
+          git -C "$target" config user.email "paseo-window@users.noreply.github.com"
+          git -C "$target" log --oneline -1
+          echo "TARGET_PATH=$target" >> "$GITHUB_ENV"
+
+      - name: Boot the daemon
+        env:
+          PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cat > "$HOME/.paseo/config.json" <<'JSON'
+          {"version":1,"daemon":{"listen":"127.0.0.1:6767","relay":{"enabled":true},"cors":{"allowedOrigins":["https://app.paseo.sh"]}},"app":{"baseUrl":"https://app.paseo.sh"},"agents":{"providers":{"pi":{"enabled":true}}}}
+          JSON
+
+          start=$(python3 -c 'import time;print(int(time.time()*1000))')
+          setsid nohup paseo daemon run --home "$HOME/.paseo" > "$HOME/daemon.log" 2>&1 < /dev/null &
+
+          for _ in $(seq 1 90); do grep -q "Server listening" "$HOME/daemon.log" && break; sleep 1; done
+          grep -m1 "Server listening" "$HOME/daemon.log"
+          listening=$(python3 -c 'import time;print(int(time.time()*1000))')
+
+          for _ in $(seq 1 120); do grep -q "relay_control_connected" "$HOME/daemon.log" && break; sleep 1; done
+          grep -q "relay_control_connected" "$HOME/daemon.log" || { echo "::error::relay never connected"; exit 1; }
+          relayed=$(python3 -c 'import time;print(int(time.time()*1000))')
+
+          echo "listen latency: $((listening - start)) ms"
+          echo "relay latency:  $((relayed - start)) ms"
+
+          paseo project create "$TARGET_PATH"
+          paseo project ls
+
+          paseo daemon pair --home "$HOME/.paseo" --json > "$RUNNER_TEMP/pair.json"
+          python3 - "$RUNNER_TEMP/pair.json" <<'PY'
+          import base64, hashlib, json, sys
+          offer = json.load(open(sys.argv[1]))["url"]
+          encoded = offer.split("#offer=", 1)[1]
+          payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+          canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+          print("offer payload:", canonical)
+          print("offer sha256: ", hashlib.sha256(canonical.encode()).hexdigest())
+          PY
+
+      - name: Steering window
+        run: |
+          echo "the window is open; steer from the app"
+          echo "target: ${{ inputs.target_repo }}"
+          echo "brief: ${{ inputs.brief }}"
+          sleep 4500
+
+      - name: Daemon log tail
+        if: always()
+        run: tail -n 120 "$HOME/daemon.log" || true
