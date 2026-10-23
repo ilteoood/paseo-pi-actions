@@ -1,0 +1,56 @@
+name: identity-roundtrip (throwaway)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Paseo CLI
+        run: npm i -g @getpaseo/cli@0.12.0
+
+      - name: Restore daemon identity from repo secrets
+        env:
+          SERVER_ID_B64: ${{ secrets.PASEO_SERVER_ID_B64 }}
+          KEYPAIR_B64: ${{ secrets.PASEO_DAEMON_KEYPAIR_B64 }}
+        run: |
+          set -euo pipefail
+          echo "secret byte sizes: server-id=${#SERVER_ID_B64} keypair=${#KEYPAIR_B64}"
+          mkdir -p "$HOME/.paseo"
+          chmod 700 "$HOME/.paseo"
+          printf '%s' "$SERVER_ID_B64" | base64 -d > "$HOME/.paseo/server-id"
+          printf '%s' "$KEYPAIR_B64" | base64 -d > "$HOME/.paseo/daemon-keypair.json"
+          chmod 600 "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
+          stat -c '%a %s %n' "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
+
+      - name: Boot the daemon
+        run: |
+          set -euo pipefail
+          cat > "$HOME/.paseo/config.json" <<'JSON'
+          {"version":1,"daemon":{"listen":"127.0.0.1:6767","relay":{"enabled":true},"cors":{"allowedOrigins":["https://app.paseo.sh"]}},"app":{"baseUrl":"https://app.paseo.sh"}}
+          JSON
+          nohup paseo daemon run --home "$HOME/.paseo" > daemon.log 2>&1 &
+          for _ in $(seq 1 90); do
+            grep -q "Server listening" daemon.log && break
+            sleep 2
+          done
+          grep -m1 "Server listening" daemon.log
+
+      - name: Prove the identity round-trip
+        run: |
+          set -euo pipefail
+          echo "server-id: $(cat "$HOME/.paseo/server-id")"
+          python3 -c "import json;print('publicKey:',json.load(open('$HOME/.paseo/daemon-keypair.json'))['publicKeyB64'])"
+          paseo daemon pair --home "$HOME/.paseo" --json > pair.json
+          python3 -c "import json;d=json.load(open('pair.json'));print('offer:',d['url']);print('connectionUri:',d['connectionUri'])"
+          echo "relay: $(grep -c relay_control_connected daemon.log) connect(s)"
+
+      - name: Daemon log tail
+        if: always()
+        run: tail -40 daemon.log
