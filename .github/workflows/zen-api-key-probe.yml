@@ -39,6 +39,27 @@ jobs:
           echo "--- stderr ---"; cat "$RUNNER_TEMP/turn.err"
           echo "agent dir after the turn:"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
 
+      - name: What the turn persisted in the agent dir
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          agent = os.environ["PI_CODING_AGENT_DIR"]
+          env_key = os.environ.get("OPENCODE_API_KEY")
+          data = json.load(open(os.path.join(agent, "auth.json")))
+          print("auth.json providers:", sorted(data))
+          for provider, credential in data.items():
+              if isinstance(credential, dict):
+                  print(" ", provider, "fields:", sorted(credential), "key_matches_env:", credential.get("key") == env_key)
+              else:
+                  print(" ", provider, "shape:", type(credential).__name__)
+          snap = json.load(open(os.path.join(agent, "models-store.json")))
+          zen = [k for k in snap if "zen" in str(k).lower()]
+          print("models-store.json zen entries:", len(zen))
+          PY
+
       - name: The catalog the key reaches
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -69,6 +90,23 @@ jobs:
             > "$RUNNER_TEMP/gateway.code" || code=$?
           echo "curl exit=$code http=$(cat "$RUNNER_TEMP/gateway.code")"
           cat "$RUNNER_TEMP/gateway.json"
+
+      - name: Which models the key reaches beyond the picker
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          for model in glm-5.3 kimi-k3 kimi-k2.5; do
+            printf '%s -> ' "$model"
+            curl -sS -o "$RUNNER_TEMP/$model.json" -w 'http=%{http_code} ' \
+              https://opencode.ai/inference/openai/v1/chat/completions \
+              -H "Authorization: Bearer $OPENCODE_API_KEY" \
+              -H "User-Agent: opencode/cli" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with ok\"}]}" || true
+            python3 -c "import json,sys;d=json.load(open('$RUNNER_TEMP/$model.json'));print('content=',repr(d.get('choices',[{}])[0].get('message',{}).get('content')),'usage=',d.get('usage',{}).get('total_tokens'),'error=',d.get('error'))" 2>/dev/null || cat "$RUNNER_TEMP/$model.json"
+            echo
+          done
 
       - name: What a rejected key looks like
         run: |
