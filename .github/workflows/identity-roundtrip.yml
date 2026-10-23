@@ -2,6 +2,13 @@ name: identity-roundtrip (throwaway)
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_server_id:
+        description: server-id the restored identity must produce
+        required: true
+      expected_public_key:
+        description: daemon public key the restored identity must produce
+        required: true
 
 jobs:
   roundtrip:
@@ -21,7 +28,7 @@ jobs:
           KEYPAIR_B64: ${{ secrets.PASEO_DAEMON_KEYPAIR_B64 }}
         run: |
           set -euo pipefail
-          echo "secret byte sizes: server-id=${#SERVER_ID_B64} keypair=${#KEYPAIR_B64}"
+          echo "secret sizes: server-id=${#SERVER_ID_B64}B keypair=${#KEYPAIR_B64}B"
           mkdir -p "$HOME/.paseo"
           chmod 700 "$HOME/.paseo"
           printf '%s' "$SERVER_ID_B64" | base64 -d > "$HOME/.paseo/server-id"
@@ -29,28 +36,56 @@ jobs:
           chmod 600 "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
           stat -c '%a %s %n' "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
 
-      - name: Boot the daemon
+      - name: Boot the daemon and wait for the relay
         run: |
           set -euo pipefail
           cat > "$HOME/.paseo/config.json" <<'JSON'
           {"version":1,"daemon":{"listen":"127.0.0.1:6767","relay":{"enabled":true},"cors":{"allowedOrigins":["https://app.paseo.sh"]}},"app":{"baseUrl":"https://app.paseo.sh"}}
           JSON
+          start=$(date +%s)
           nohup paseo daemon run --home "$HOME/.paseo" > daemon.log 2>&1 &
           for _ in $(seq 1 90); do
             grep -q "Server listening" daemon.log && break
             sleep 2
           done
           grep -m1 "Server listening" daemon.log
+          echo "listen latency: $(( $(date +%s) - start ))s"
+          for _ in $(seq 1 60); do
+            grep -q "relay_control_connected" daemon.log && break
+            sleep 2
+          done
+          if ! grep -q "relay_control_connected" daemon.log; then
+            echo "::error::relay never connected"; exit 1
+          fi
+          echo "relay latency: $(( $(date +%s) - start ))s"
 
-      - name: Prove the identity round-trip
+      - name: Assert the identity is the one in the secrets
         run: |
           set -euo pipefail
-          echo "server-id: $(cat "$HOME/.paseo/server-id")"
-          python3 -c "import json;print('publicKey:',json.load(open('$HOME/.paseo/daemon-keypair.json'))['publicKeyB64'])"
+          got_id=$(cat "$HOME/.paseo/server-id")
+          got_key=$(python3 -c "import json;print(json.load(open('$HOME/.paseo/daemon-keypair.json'))['publicKeyB64'])")
+          echo "server-id: $got_id"
+          echo "publicKey: $got_key"
+          [ "$got_id" = "${{ inputs.expected_server_id }}" ] || { echo "::error::server-id mismatch"; exit 1; }
+          [ "$got_key" = "${{ inputs.expected_public_key }}" ] || { echo "::error::public key mismatch"; exit 1; }
+
+      - name: Assert a previously generated offer resolves
+        run: |
+          set -euo pipefail
           paseo daemon pair --home "$HOME/.paseo" --json > pair.json
-          python3 -c "import json;d=json.load(open('pair.json'));print('offer:',d['url']);print('connectionUri:',d['connectionUri'])"
-          echo "relay: $(grep -c relay_control_connected daemon.log) connect(s)"
+          offer=$(python3 -c "import json;print(json.load(open('pair.json'))['url'])")
+          echo "offer generated in CI: $offer"
+          for i in 1 2 3 4 5; do
+            out=$(paseo --host "$offer" status --json 2>&1 || true)
+            echo "attempt $i: $out" | head -c 400; echo
+            if echo "$out" | grep -q '"connectedDaemon": *"reachable"'; then
+              echo "offer resolves: the runner's daemon answered through the relay"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::the offer did not resolve"; exit 1
 
       - name: Daemon log tail
         if: always()
-        run: tail -40 daemon.log
+        run: grep -E "Server listening|relay_control_|Replaced by new connection" daemon.log | tail -20
