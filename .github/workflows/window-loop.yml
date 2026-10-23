@@ -64,6 +64,7 @@ jobs:
       - name: Boot the daemon
         env:
           PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
           cat > "$HOME/.paseo/config.json" <<'JSON'
