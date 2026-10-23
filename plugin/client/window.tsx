@@ -5,7 +5,7 @@ import {
   useWorkspace,
 } from "@getpaseo/plugin/client";
 import { ExternalLink } from "@getpaseo/plugin/client/ui";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { windowStartRpc, windowStatusRpc, windowStopRpc } from "../shared/window";
@@ -28,6 +28,11 @@ export function WindowPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
   const start = useMutation({ mutationFn: () => callStart({ directory }), onSettled: refresh });
   const stop = useMutation({ mutationFn: () => callStop({}), onSettled: refresh });
 
+  const statusRevision = status.dataUpdatedAt;
+  useEffect(() => {
+    start.reset();
+    stop.reset();
+  }, [statusRevision]);
   const runs = status.data?.runs ?? [];
   const repo = status.data?.repo ?? "";
   const branch = status.data?.branch;
@@ -62,7 +67,7 @@ export function WindowPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>{repo === "" ? "Reading the workspace" : repo}</Text>
         {branch ? (
-          <Text style={styles.detail}>Commits land on {branch}, pushed after each commit.</Text>
+          <Text style={styles.detail}>The harness starts the agent on {branch} and pushes after every commit.</Text>
         ) : null}
         {runs.length === 0 ? (
           <Text style={styles.detail}>No window is open.</Text>
