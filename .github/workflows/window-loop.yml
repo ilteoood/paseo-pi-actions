@@ -7,22 +7,51 @@ on:
         description: owner/repo the window clones, works in and pushes to
         required: true
 
+concurrency:
+  group: paseo-window-1
+  cancel-in-progress: false
+
+run-name: window-1 ${{ inputs.target_repo }}
+
 jobs:
   window:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    container:
+      image: node:22-bookworm
+      options: --user root
+    timeout-minutes: 120
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install paseo, pi and the Zen provider
+      - name: Install paseo and pi
         run: |
           set -euo pipefail
           npm i -g --ignore-scripts @getpaseo/cli@0.12.0 @earendil-works/pi-coding-agent@1.4.0
           pi install npm:opencode-zen-oauth@1.2.11
           pi --version
           paseo --version
+
+      - name: Init the harness
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "harness dependencies only; the daemon boots below with the window's own environment"
+          mkdir -p "$HOME/.pi/agent"
+          curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/AGENTS.md \
+            -o "$HOME/.pi/agent/AGENTS.md"
+          curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/pi-agent.sh \
+            | grep -v '^paseo daemon run$' > "$RUNNER_TEMP/pi-agent-deps.sh"
+          if grep -q 'daemon run' "$RUNNER_TEMP/pi-agent-deps.sh"; then
+            echo "::error::the harness script still boots the daemon; it was not stripped"
+            exit 1
+          fi
+          bash "$RUNNER_TEMP/pi-agent-deps.sh"
+          for tool in gh pi pnpm; do
+            if ! command -v "$tool" > /dev/null; then
+              echo "::error::$tool is missing after the harness init"
+              exit 1
+            fi
+          done
+          find "$HOME/.pi/agent" -maxdepth 1 -type f | sort
 
       - name: Restore the daemon identity
         env:
@@ -47,17 +76,48 @@ jobs:
           PY
           cat "$HOME/.pi/agent/settings.json"
 
-      - name: Clone the target repo
+      - name: Prepare the target repo
         env:
           TARGET_REPO_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
           TARGET_REPO: ${{ inputs.target_repo }}
+          WINDOW_BRANCH: feature/window-1
         run: |
           set -euo pipefail
           target="$RUNNER_TEMP/target/$TARGET_REPO"
           mkdir -p "$(dirname "$target")"
           git clone --quiet "https://x-access-token:${TARGET_REPO_TOKEN}@github.com/${TARGET_REPO}.git" "$target"
-          git -C "$target" config user.name "paseo window"
-          git -C "$target" config user.email "paseo-window@users.noreply.github.com"
+          git -C "$target" config user.name "Matteo Pietro Dazzi"
+          git -C "$target" config user.email "matteopietro.dazzi@gmail.com"
+
+          probe_started=$(python3 -c 'import time;print(int(time.time()*1000))')
+          git -C "$target" push --dry-run origin "HEAD:refs/heads/paseo-probe"
+          probe_finished=$(python3 -c 'import time;print(int(time.time()*1000))')
+          echo "write probe: $((probe_finished - probe_started)) ms"
+
+          if git -C "$target" ls-remote --exit-code --heads origin "$WINDOW_BRANCH" > /dev/null; then
+            git -C "$target" checkout --quiet "$WINDOW_BRANCH"
+          else
+            git -C "$target" checkout --quiet -b "$WINDOW_BRANCH"
+          fi
+
+          cat > "$target/.git/hooks/post-commit" <<'HOOK'
+          #!/bin/bash
+          set -euo pipefail
+          branch=$(git symbolic-ref --short HEAD)
+          default_branch=$(git rev-parse --abbrev-ref origin/HEAD | sed 's@^origin/@@')
+          if [ "$branch" = "$default_branch" ]; then
+            echo "post-commit: refusing to push $branch"
+            exit 0
+          fi
+          if git push --quiet origin "HEAD:refs/heads/$branch"; then
+            echo "post-commit: pushed $branch"
+          else
+            echo "post-commit: push of $branch failed"
+          fi
+          HOOK
+          chmod +x "$target/.git/hooks/post-commit"
+
+          git -C "$target" branch --show-current
           git -C "$target" log --oneline -1
           echo "TARGET_PATH=$target" >> "$GITHUB_ENV"
 
@@ -65,6 +125,7 @@ jobs:
         env:
           PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
         run: |
           set -euo pipefail
           cat > "$HOME/.paseo/config.json" <<'JSON'
@@ -103,8 +164,9 @@ jobs:
         run: |
           echo "the window is open; steer from the app"
           echo "target: ${{ inputs.target_repo }}"
-          sleep 4500
+          echo "branch: feature/window-1"
+          sleep 5400
 
       - name: Daemon log tail
         if: always()
-        run: tail -n 120 "$HOME/daemon.log" || true
+        run: tail -n 400 "$HOME/daemon.log" || true
