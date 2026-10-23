@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { repoFromRemote } from "../server/window.ts";
+import { offloadSettings } from "../shared/settings.ts";
 
 test("reads owner and repo from every remote form git accepts", () => {
   const remotes = [
@@ -18,4 +19,12 @@ test("reads owner and repo from every remote form git accepts", () => {
 
 test("refuses a remote that is not GitHub", () => {
   assert.throws(() => repoFromRemote("git@gitlab.com:ilteoood/paseo.git"), /not a GitHub remote/);
+});
+
+test("accepts an owner/repo or an empty offload repository", () => {
+  assert.deepEqual(offloadSettings.schema.parse({}), { repository: "" });
+  assert.deepEqual(offloadSettings.schema.parse({ repository: " ilteoood/harness " }), {
+    repository: "ilteoood/harness",
+  });
+  assert.throws(() => offloadSettings.schema.parse({ repository: "ilteoood" }));
 });

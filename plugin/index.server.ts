@@ -1,11 +1,24 @@
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginServerContext, PluginSettings } from "@getpaseo/plugin/server";
 import { startWindow, stopWindows, windowStatus } from "./server/window";
+import { offloadSettings } from "./shared/settings";
 import { windowStartRpc, windowStatusRpc, windowStopRpc } from "./shared/window";
 
+type OffloadSettings = PluginSettings<typeof offloadSettings.schema>;
+
+async function configuredRepository(settings: OffloadSettings): Promise<string> {
+  const state = await settings.read();
+  return state.status === "ready" ? state.values.repository : "";
+}
+
 export default function contribute(server: PluginServerContext): () => void {
-  server.handle(windowStatusRpc, ({ directory }) => windowStatus(directory));
-  server.handle(windowStartRpc, ({ directory }) => startWindow(directory));
-  server.handle(windowStopRpc, () => stopWindows());
+  const settings = server.registerSettings(offloadSettings);
+  server.handle(windowStatusRpc, async ({ directory }) =>
+    windowStatus(directory, await configuredRepository(settings)),
+  );
+  server.handle(windowStartRpc, async ({ directory }) =>
+    startWindow(directory, await configuredRepository(settings)),
+  );
+  server.handle(windowStopRpc, async () => stopWindows(await configuredRepository(settings)));
 
   return () => {};
 }

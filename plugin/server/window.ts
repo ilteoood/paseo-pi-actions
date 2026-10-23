@@ -1,13 +1,11 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 
 const runCommand = promisify(execFile);
 
-const OFFLOAD_REPOSITORY = "ilteoood/paseo-pi-actions";
-const OFFLOAD_REF = "main";
 const WINDOW_WORKFLOW = "window-loop.yml";
-const WINDOW_BRANCH = "feature/window-1";
+
 const STOP_SETTLE_ATTEMPTS = 15;
 const STOP_SETTLE_DELAY_MS = 1000;
 
@@ -46,12 +44,12 @@ function repoFromDisplayTitle(displayTitle: string): string {
   return displayTitle.split(" ").at(-1) ?? "";
 }
 
-async function listedRuns(): Promise<ListedRun[]> {
+async function listedRuns(repository: string): Promise<ListedRun[]> {
   const output = await gh([
     "run",
     "list",
     "--repo",
-    OFFLOAD_REPOSITORY,
+    repository,
     "--workflow",
     WINDOW_WORKFLOW,
     "--limit",
@@ -72,8 +70,8 @@ function toWindowRun(entry: ListedRun): WindowRun {
   };
 }
 
-async function activeRuns(): Promise<WindowRun[]> {
-  const listed = await listedRuns();
+async function activeRuns(repository: string): Promise<WindowRun[]> {
+  const listed = await listedRuns(repository);
   return listed.filter((entry) => entry.status !== "completed").map(toWindowRun);
 }
 
@@ -88,20 +86,40 @@ async function repositoryOf(directory: string): Promise<string> {
   return repoFromRemote(stdout.trim());
 }
 
-export async function windowStatus(directory: string) {
+async function defaultBranchOf(directory: string, repo: string): Promise<string> {
+  try {
+    const { stdout } = await runCommand("git", [
+      "-C",
+      directory,
+      "symbolic-ref",
+      "--short",
+      "refs/remotes/origin/HEAD",
+    ]);
+    return stdout.trim().replace(/^origin\//, "");
+  } catch {
+    return gh(["repo", "view", repo, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"]);
+  }
+}
+
+export async function windowStatus(directory: string, repository: string) {
+  const repo = await repositoryOf(directory);
   return {
-    repo: await repositoryOf(directory),
-    branch: WINDOW_BRANCH,
-    runs: await activeRuns(),
+    repo,
+    branch: await defaultBranchOf(directory, repo),
+    runs: repository === "" ? [] : await activeRuns(repository),
   };
 }
 
-export async function startWindow(directory: string) {
+export async function startWindow(directory: string, repository: string) {
+  if (repository === "") {
+    throw new Error("set the offload repository in the plugin settings");
+  }
   if (dispatching) {
     throw new Error("a dispatch is already in flight");
   }
   const repo = await repositoryOf(directory);
-  const running = await activeRuns();
+  const branch = await defaultBranchOf(directory, repo);
+  const running = await activeRuns(repository);
   const occupying = running[0];
   if (occupying) {
     throw new Error(
@@ -115,27 +133,28 @@ export async function startWindow(directory: string) {
       "run",
       WINDOW_WORKFLOW,
       "--repo",
-      OFFLOAD_REPOSITORY,
+      repository,
       "--ref",
-      OFFLOAD_REF,
+      branch,
       "-f",
       `target_repo=${repo}`,
     ]);
   } finally {
     dispatching = false;
   }
-  return { branch: WINDOW_BRANCH };
+  return { branch };
 }
 
-export async function stopWindows() {
-  const running = await activeRuns();
+export async function stopWindows(repository: string) {
+  if (repository === "") {
+    return { cancelled: [] };
+  }
+  const running = await activeRuns(repository);
   await Promise.allSettled(
-    running.map((entry) =>
-      gh(["run", "cancel", String(entry.runId), "--repo", OFFLOAD_REPOSITORY]),
-    ),
+    running.map((entry) => gh(["run", "cancel", String(entry.runId), "--repo", repository])),
   );
   for (let attempt = 0; attempt < STOP_SETTLE_ATTEMPTS; attempt += 1) {
-    if ((await activeRuns()).length === 0) {
+    if ((await activeRuns(repository)).length === 0) {
       return { cancelled: running.map((entry) => entry.runId) };
     }
     await delay(STOP_SETTLE_DELAY_MS);

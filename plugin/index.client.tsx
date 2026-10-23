@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { OffloadSettings } from "./client/settings";
 import { WindowPanel } from "./client/window";
 
 export default function contribute(client: PluginClientContext): () => void {
@@ -8,6 +9,13 @@ export default function contribute(client: PluginClientContext): () => void {
     icon: "PackageOpen",
     context: "workspace",
     Component: WindowPanel,
+  });
+
+  client.addSettingsScreen({
+    id: "offload",
+    title: "Offload window",
+    icon: "PackageOpen",
+    Component: OffloadSettings,
   });
 
   client.addCommandCenterItem({

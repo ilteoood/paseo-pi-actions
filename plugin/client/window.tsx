@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PluginWorkspacePanelProps,
   useRpc,
+  useSettings,
   useWorkspace,
 } from "@getpaseo/plugin/client";
 import { ExternalLink } from "@getpaseo/plugin/client/ui";
@@ -9,9 +10,11 @@ import { useEffect, useMemo } from "react";
 import { Pressable, Text, View } from "react-native";
 import { ScrollView } from "@getpaseo/plugin/client/react-native";
 import { windowStartRpc, windowStatusRpc, windowStopRpc } from "../shared/window";
+import { offloadSettings } from "../shared/settings";
 
 export function WindowPanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
   const directory = useWorkspace(workspaceId, (workspace) => workspace.directory) ?? "";
+  const settings = useSettings(offloadSettings);
   const callStatus = useRpc(windowStatusRpc);
   const callStart = useRpc(windowStartRpc);
   const callStop = useRpc(windowStopRpc);
@@ -37,7 +40,8 @@ export function WindowPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
   const repo = status.data?.repo ?? "";
   const branch = status.data?.branch;
   const pending = start.isPending || stop.isPending;
-  const canStart = !pending && runs.length === 0;
+  const configured = settings.status === "ready" && settings.values.repository !== "";
+  const canStart = !pending && runs.length === 0 && configured;
   const canStop = !pending && runs.length > 0;
   const failure = status.error ?? start.error ?? stop.error;
 
@@ -67,7 +71,12 @@ export function WindowPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>{repo === "" ? "Reading the workspace" : repo}</Text>
         {branch ? (
-          <Text style={styles.detail}>The harness starts the agent on {branch} and pushes after every commit.</Text>
+          <Text style={styles.detail}>The harness starts from {branch} and creates a work branch from it when needed.</Text>
+        ) : null}
+        {settings.status === "ready" && !configured ? (
+          <Text style={styles.detail}>
+            Set the offload repository in Settings → Plugins → Offload window.
+          </Text>
         ) : null}
         {runs.length === 0 ? (
           <Text style={styles.detail}>No window is open.</Text>
