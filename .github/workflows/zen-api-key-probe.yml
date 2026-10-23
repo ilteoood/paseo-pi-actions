@@ -15,13 +15,13 @@ jobs:
       - name: Install pi and the Zen provider
         run: |
           set -euo pipefail
-          PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-agent"
+          export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-agent"
           echo "PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR" >> "$GITHUB_ENV"
           mkdir -p "$PI_CODING_AGENT_DIR"
           npm i -g --ignore-scripts @earendil-works/pi-coding-agent@1.4.0
           pi install npm:opencode-zen-oauth@1.2.11
           pi --version
-          cat "$PI_CODING_AGENT_DIR/settings.json"
+          cat "$PI_CODING_AGENT_DIR/settings.json" || true
 
       - name: A real turn on the key, from a clean agent dir
         env:
