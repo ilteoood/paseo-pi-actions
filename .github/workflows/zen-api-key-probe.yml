@@ -21,44 +21,71 @@ jobs:
           npm i -g --ignore-scripts @earendil-works/pi-coding-agent@1.4.0
           pi install npm:opencode-zen-oauth@1.2.11
           pi --version
+          cat "$PI_CODING_AGENT_DIR/settings.json"
 
-      - name: A clean agent dir, no auth.json, no models-store.json
+      - name: A real turn on the key, from a clean agent dir
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
-          find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+          echo "agent dir before the turn:"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
           test ! -f "$PI_CODING_AGENT_DIR/auth.json" && echo "auth.json: absent"
           test ! -f "$PI_CODING_AGENT_DIR/models-store.json" && echo "models-store.json: absent"
+          code=0
+          timeout 240 pi --print --approve --model opencode-zen/glm-5.3-flash "reply with ok" \
+            > "$RUNNER_TEMP/turn.out" 2> "$RUNNER_TEMP/turn.err" || code=$?
+          echo "exit=$code"
+          echo "--- stdout ---"; cat "$RUNNER_TEMP/turn.out"
+          echo "--- stderr ---"; cat "$RUNNER_TEMP/turn.err"
+          echo "agent dir after the turn:"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
 
       - name: The catalog the key reaches
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
-          timeout 120 pi --list-models > "$RUNNER_TEMP/models.txt" || true
+          code=0
+          timeout 120 pi --list-models > "$RUNNER_TEMP/models.txt" 2> "$RUNNER_TEMP/models.err" || code=$?
+          echo "exit=$code"
           echo "--- opencode-zen entries ---"
-          grep -i "opencode-zen" "$RUNNER_TEMP/models.txt" || echo "(none)"
-          echo "zen entries: $(grep -ci 'opencode-zen' "$RUNNER_TEMP/models.txt" || true)"
+          grep -i "zen" "$RUNNER_TEMP/models.txt" || echo "(none)"
+          echo "zen entries: $(grep -ci 'zen' "$RUNNER_TEMP/models.txt" || true)"
           echo "total entries: $(grep -c . "$RUNNER_TEMP/models.txt" || true)"
-          find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+          echo "--- stderr ---"; cat "$RUNNER_TEMP/models.err"
+          echo "agent dir after the listing:"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
 
-      - name: A real turn on the key
+      - name: The gateway, called straight with the key
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          set -uo pipefail
-          timeout 180 pi --print --approve --model opencode-zen/glm-5.3-flash "reply with ok" \
-            > "$RUNNER_TEMP/turn.out" 2> "$RUNNER_TEMP/turn.err"
-          echo "exit=$?"
-          echo "--- stdout ---"; cat "$RUNNER_TEMP/turn.out"
-          echo "--- stderr ---"; cat "$RUNNER_TEMP/turn.err"
-          echo "--- agent dir after the turn ---"; find "$PI_CODING_AGENT_DIR" -maxdepth 1 -type f | sort
+          set -euo pipefail
+          code=0
+          curl -sS -o "$RUNNER_TEMP/gateway.json" -w '%{http_code}' \
+            https://opencode.ai/inference/openai/v1/chat/completions \
+            -H "Authorization: Bearer $OPENCODE_API_KEY" \
+            -H "User-Agent: opencode/cli" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"reply with ok"}]}' \
+            > "$RUNNER_TEMP/gateway.code" || code=$?
+          echo "curl exit=$code http=$(cat "$RUNNER_TEMP/gateway.code")"
+          cat "$RUNNER_TEMP/gateway.json"
 
       - name: What a rejected key looks like
         run: |
-          set -uo pipefail
-          OPENCODE_API_KEY=oc_sk_0000000000000000000000000000 \
+          set -euo pipefail
+          export OPENCODE_API_KEY=oc_sk_0000000000000000000000000000
+          echo "--- gateway ---"
+          curl -sS -o "$RUNNER_TEMP/bogus.json" -w 'http=%{http_code}\n' \
+            https://opencode.ai/inference/openai/v1/chat/completions \
+            -H "Authorization: Bearer $OPENCODE_API_KEY" \
+            -H "User-Agent: opencode/cli" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"reply with ok"}]}' || true
+          cat "$RUNNER_TEMP/bogus.json"
+          echo "--- pi ---"
+          code=0
           timeout 120 pi --print --approve --model opencode-zen/glm-5.3-flash "reply with ok" \
-            > "$RUNNER_TEMP/bogus.out" 2> "$RUNNER_TEMP/bogus.err"
-          echo "exit=$?"
+            > "$RUNNER_TEMP/bogus.out" 2> "$RUNNER_TEMP/bogus.err" || code=$?
+          echo "exit=$code"
           echo "--- stdout ---"; cat "$RUNNER_TEMP/bogus.out"
           echo "--- stderr ---"; cat "$RUNNER_TEMP/bogus.err"
