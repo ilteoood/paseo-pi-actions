@@ -7,8 +7,6 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -17,6 +15,9 @@ jobs:
       - name: Install pi and the Zen provider
         run: |
           set -euo pipefail
+          PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-agent"
+          echo "PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$PI_CODING_AGENT_DIR"
           npm i -g --ignore-scripts @earendil-works/pi-coding-agent@1.4.0
           pi install npm:opencode-zen-oauth@1.2.11
           pi --version
