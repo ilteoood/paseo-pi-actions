@@ -80,6 +80,7 @@ jobs:
       - name: Run the harness
         env:
           GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
           PASEO_RELAY_ENABLED: "true"
