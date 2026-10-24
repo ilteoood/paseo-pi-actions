@@ -6,12 +6,22 @@ on:
       target_repo:
         description: owner/repo the window clones, works in and pushes to
         required: true
+      slot:
+        description: window slot and paired daemon identity
+        required: true
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
 
 concurrency:
-  group: paseo-window-1
+  group: paseo-window-${{ inputs.slot }}
   cancel-in-progress: false
 
-run-name: window-1 ${{ inputs.target_repo }}
+run-name: window-${{ inputs.slot }} ${{ inputs.target_repo }}
 
 jobs:
   window:
@@ -58,8 +68,8 @@ jobs:
 
       - name: Restore the daemon identity
         env:
-          SERVER_ID_B64: ${{ secrets.PASEO_SERVER_ID_B64 }}
-          KEYPAIR_B64: ${{ secrets.PASEO_DAEMON_KEYPAIR_B64 }}
+          SERVER_ID_B64: ${{ secrets[format('PASEO_SERVER_ID_B64_{0}', inputs.slot)] }}
+          KEYPAIR_B64: ${{ secrets[format('PASEO_DAMON_KEYPAIR_B64_{0}', inputs.slot)] }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.paseo" && chmod 700 "$HOME/.paseo"
@@ -83,7 +93,7 @@ jobs:
         env:
           TARGET_REPO_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
           TARGET_REPO: ${{ inputs.target_repo }}
-          WINDOW_BRANCH: feature/window-1
+          WINDOW_BRANCH: feature/window-${{ inputs.slot }}
         run: |
           set -euo pipefail
           target="$RUNNER_TEMP/target/$TARGET_REPO"
@@ -152,22 +162,12 @@ jobs:
           paseo project create "$TARGET_PATH"
           paseo project ls
 
-          paseo daemon pair --home "$HOME/.paseo" --json > "$RUNNER_TEMP/pair.json"
-          python3 - "$RUNNER_TEMP/pair.json" <<'PY'
-          import base64, hashlib, json, sys
-          offer = json.load(open(sys.argv[1]))["url"]
-          encoded = offer.split("#offer=", 1)[1]
-          payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
-          canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-          print("offer payload:", canonical)
-          print("offer sha256: ", hashlib.sha256(canonical.encode()).hexdigest())
-          PY
-
       - name: Steering window
         run: |
           echo "the window is open; steer from the app"
           echo "target: ${{ inputs.target_repo }}"
-          echo "branch: feature/window-1"
+          echo "branch: feature/window-${{ inputs.slot }}"
+          echo "host: Window-${{ inputs.slot }}"
           sleep 5400
 
       - name: Daemon log tail

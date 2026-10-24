@@ -1,6 +1,7 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { OffloadSettings } from "./client/settings";
 import { WindowPanel } from "./client/window";
+import { windowStartRpc } from "./shared/window";
 
 export default function contribute(client: PluginClientContext): () => void {
   client.addWorkspacePanel({
@@ -23,7 +24,8 @@ export default function contribute(client: PluginClientContext): () => void {
     title: "Offload a window for this repo",
     icon: "PackageOpen",
     context: "workspace",
-    onSelect({ openPanel }) {
+    async onSelect({ rpc, workspace, openPanel }) {
+      await rpc(windowStartRpc, { directory: workspace.directory });
       openPanel("offload-window");
     },
   });
