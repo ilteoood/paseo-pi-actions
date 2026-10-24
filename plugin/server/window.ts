@@ -1,14 +1,10 @@
 import { execFile } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { WINDOW_SLOTS } from "../shared/window.ts";
 
 const runCommand = promisify(execFile);
 
 const WINDOW_WORKFLOW = "window-loop.yml";
-
-const STOP_SETTLE_ATTEMPTS = 15;
-const STOP_SETTLE_DELAY_MS = 1000;
 
 let dispatchTail: Promise<void> = Promise.resolve();
 
@@ -278,11 +274,5 @@ export async function stopWindows(repository: string) {
   await Promise.allSettled(
     running.map((entry) => gh(["run", "cancel", String(entry.runId), "--repo", repository])),
   );
-  for (let attempt = 0; attempt < STOP_SETTLE_ATTEMPTS; attempt += 1) {
-    if ((await activeRuns(repository)).length === 0) {
-      return { cancelled: running.map((entry) => entry.runId) };
-    }
-    await delay(STOP_SETTLE_DELAY_MS);
-  }
-  throw new Error("the window is still running after it was cancelled");
+  return { cancelled: running.map((entry) => entry.runId) };
 }
