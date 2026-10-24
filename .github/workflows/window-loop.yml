@@ -32,7 +32,7 @@ jobs:
     container:
       image: node:22-bookworm
       options: --user root
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Install paseo and pi
         run: |
@@ -42,29 +42,18 @@ jobs:
           pi --version
           paseo --version
 
-      - name: Init the harness
-        env:
-          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+      - name: Fetch the harness
         run: |
           set -euo pipefail
-          echo "harness dependencies only; the daemon boots below with the window's own environment"
           mkdir -p "$HOME/.pi/agent"
           curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/AGENTS.md \
             -o "$HOME/.pi/agent/AGENTS.md"
           curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/pi-agent.sh \
-            | grep -vE '^[[:space:]]*(sudo )?paseo daemon([[:space:]]|$)' > "$RUNNER_TEMP/pi-agent-deps.sh"
-          if grep -qE 'paseo daemon' "$RUNNER_TEMP/pi-agent-deps.sh"; then
-            echo "::error::the harness script still boots the daemon; it was not stripped"
+            -o "$RUNNER_TEMP/pi-agent.sh"
+          if ! grep -qE 'paseo daemon([[:space:]]|$)' "$RUNNER_TEMP/pi-agent.sh"; then
+            echo "::error::the harness script no longer boots the daemon"
             exit 1
           fi
-          bash "$RUNNER_TEMP/pi-agent-deps.sh"
-          for tool in gh pi pnpm; do
-            if ! command -v "$tool" > /dev/null; then
-              echo "::error::$tool is missing after the harness init"
-              exit 1
-            fi
-          done
-          find "$HOME/.pi/agent" -maxdepth 1 -type f | sort
 
       - name: Restore the daemon identity
         env:
@@ -80,12 +69,62 @@ jobs:
           printf '%s' "$SERVER_ID_B64" | base64 -d > "$HOME/.paseo/server-id"
           printf '%s' "$KEYPAIR_B64" | base64 -d > "$HOME/.paseo/daemon-keypair.json"
           chmod 600 "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
-          python3 - "$HOME/.paseo/daemon-keypair.json" <<'PY'
-          import json, sys
-          payload = json.load(open(sys.argv[1]))
-          if not payload.get("publicKeyB64"):
-              raise SystemExit("the restored daemon keypair carries no public key")
-          PY
+          node -e '
+            const payload = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf-8"));
+            if (payload.v !== 2 || !payload.publicKeyB64 || !payload.secretKeyB64) {
+              console.error("the restored daemon keypair does not match the daemon keypair schema");
+              process.exit(1);
+            }
+          ' "$HOME/.paseo/daemon-keypair.json"
+
+      - name: Run the harness
+        env:
+          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
+          PASEO_RELAY_ENABLED: "true"
+        run: |
+          set -euo pipefail
+          date +%s%3N > "$RUNNER_TEMP/started-at"
+          setsid nohup bash -c 'echo $$ > "$1"; exec bash "$2"' _ \
+            "$RUNNER_TEMP/harness.pid" "$RUNNER_TEMP/pi-agent.sh" \
+            > "$HOME/harness.log" 2>&1 < /dev/null &
+          echo "the harness installs its toolchain and boots paseo when it is done"
+
+      - name: Wait for the daemon
+        run: |
+          set -euo pipefail
+          log="$HOME/.paseo/daemon.log"
+          for _ in $(seq 1 2700); do
+            grep -q "Server listening" "$log" 2> /dev/null && break
+            pid=$(cat "$RUNNER_TEMP/harness.pid" 2> /dev/null || true)
+            if [ -n "$pid" ] && ! kill -0 "$pid" 2> /dev/null; then
+              echo "::error::the harness exited before booting paseo"
+              tail -n 60 "$HOME/harness.log" || true
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -m1 "Server listening" "$log" || { echo "::error::the daemon never started"; tail -n 60 "$HOME/harness.log" || true; exit 1; }
+          listening=$(date +%s%3N)
+          if grep -q "Failed to load daemon keypair, regenerating" "$log"; then
+            echo "::error::slot ${{ inputs.slot }} booted on a fresh keypair; its paired offer no longer matches"
+            exit 1
+          fi
+          for _ in $(seq 1 120); do
+            grep -q "relay_control_connected" "$log" 2> /dev/null && break
+            sleep 1
+          done
+          grep -q "relay_control_connected" "$log" || { echo "::error::relay never connected"; exit 1; }
+          relayed=$(date +%s%3N)
+          for tool in gh pi pnpm; do
+            if ! command -v "$tool" > /dev/null; then
+              echo "::error::$tool is missing after the harness setup"
+              exit 1
+            fi
+          done
+          echo "listen latency: $((listening - $(cat "$RUNNER_TEMP/started-at"))) ms"
+          echo "relay latency:  $((relayed - listening)) ms"
 
       - name: Generate the pi config
         run: |
@@ -144,36 +183,9 @@ jobs:
           git -C "$target" log --oneline -1
           echo "TARGET_PATH=$target" >> "$GITHUB_ENV"
 
-      - name: Boot the daemon
-        env:
-          PASEO_PASSWORD: ${{ secrets.PASEO_PASSWORD }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GH_TOKEN: ${{ secrets.TARGET_REPO_TOKEN }}
+      - name: Register the project
         run: |
           set -euo pipefail
-          cat > "$HOME/.paseo/config.json" <<'JSON'
-          {"version":1,"daemon":{"listen":"127.0.0.1:6767","relay":{"enabled":true},"cors":{"allowedOrigins":["https://app.paseo.sh"]}},"app":{"baseUrl":"https://app.paseo.sh"},"agents":{"providers":{"pi":{"enabled":true}}}}
-          JSON
-
-          start=$(python3 -c 'import time;print(int(time.time()*1000))')
-          setsid nohup paseo daemon run --home "$HOME/.paseo" > "$HOME/daemon.log" 2>&1 < /dev/null &
-
-          for _ in $(seq 1 90); do grep -q "Server listening" "$HOME/daemon.log" && break; sleep 1; done
-          grep -m1 "Server listening" "$HOME/daemon.log"
-          listening=$(python3 -c 'import time;print(int(time.time()*1000))')
-
-          for _ in $(seq 1 120); do grep -q "relay_control_connected" "$HOME/daemon.log" && break; sleep 1; done
-          grep -q "relay_control_connected" "$HOME/daemon.log" || { echo "::error::relay never connected"; exit 1; }
-          relayed=$(python3 -c 'import time;print(int(time.time()*1000))')
-
-          if grep -q "Failed to load daemon keypair, regenerating" "$HOME/daemon.log"; then
-            echo "::error::slot ${{ inputs.slot }} booted on a fresh keypair; its paired offer no longer matches"
-            exit 1
-          fi
-
-          echo "listen latency: $((listening - start)) ms"
-          echo "relay latency:  $((relayed - start)) ms"
-
           paseo project create "$TARGET_PATH"
           paseo project ls
 
@@ -187,4 +199,4 @@ jobs:
 
       - name: Daemon log tail
         if: always()
-        run: tail -n 400 "$HOME/daemon.log" || true
+        run: tail -n 400 "$HOME/.paseo/daemon.log" "$HOME/harness.log" || true
