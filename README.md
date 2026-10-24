@@ -31,7 +31,7 @@ A slot is a fixed identity: slot `n` always boots as `Window-n`. Five slots mean
 | The [Paseo](https://paseo.sh) app and CLI | the plugin declares `paseo >= 0.12.0`, and the window installs the latest CLI itself |
 | `git` and `gh` on the daemon machine | the plugin shells out to both; `gh` must be authenticated with a token that can dispatch workflows, read the default branch and cancel runs in the offload repository |
 | A GitHub account with a fine-grained token for your target repositories | `Contents: read and write` to clone and push, `Pull requests: read` for the daemon's PR polling |
-| A static model API key | `OPENCODE_API_KEY` for OpenCode Zen, or another provider key your harness supports. It must be a static key: an OAuth credential that rotates on refresh dies inside the job |
+| A static model API key | `OPENCODE_API_KEY` for OpenCode Zen, which pi ships as a built-in provider, or a key for any other provider pi ships. It must be a static key: an OAuth credential that rotates on refresh dies inside the job |
 | A public offload repository | public machinery means free GitHub-hosted runners, and the run logs are world-readable, so no secret may ever be printed into a log |
 
 ## Set up your fork
@@ -60,13 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/pi-agent.sh \
 
 Replace both URLs with your own. The script has to run `paseo daemon` on a line of its own: the job greps for that line and fails loudly when it is gone, because the harness is what boots the daemon now. The upstream script also installs that author's personal pi packages; yours should carry your own.
 
-While you are in the file, change this:
-
-| Line | Change it to |
-| --- | --- |
-| `pi install npm:opencode-zen-oauth@1.2.11` | your provider's package, or drop it and use a provider pi already ships |
-
-The install line above it stays as it is: `npm i -g --ignore-scripts @getpaseo/cli@latest @earendil-works/pi-coding-agent@latest` always takes the latest release of both, so a breaking release upstream can break a window. The run's log tail has the versions it booted.
+Nothing else in the job needs changing. It installs paseo and pi at their latest release, `npm i -g --ignore-scripts @getpaseo/cli@latest @earendil-works/pi-coding-agent@latest`, so a breaking release upstream can break a window. The run's log tail has the versions it booted.
 
 ### 3. Generate the five window identities
 
@@ -125,7 +119,7 @@ gh secret set PASEO_PASSWORD --repo "$OFFLOAD_REPO" --body "$PASEO_PASSWORD"
 | `PASEO_DAEMON_KEYPAIR_B64_1` … `PASEO_DAEMON_KEYPAIR_B64_5` | base64 of each slot's `daemon-keypair.json` |
 | `TARGET_REPO_TOKEN` | the token that clones and pushes your target repositories, and the daemon's `GH_TOKEN` |
 | `OPENCODE_API_KEY` | the model credential, a static key |
-| `MINIMAX_API_KEY` | optional, a second provider |
+| `MINIMAX_API_KEY` | optional, a second built-in provider |
 | `PASEO_PASSWORD` | the daemon password, it gates the relay path on newer Paseo versions |
 
 A repository secret can be overwritten but never read back. Keep the local copy from step 3, it is the only way to restore a secret you no longer have.
@@ -196,7 +190,7 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 | --- | --- | --- |
 | Slot count | `WINDOW_SLOTS` in `plugin/shared/window.ts`, the slot `choice` in `window-loop.yml`, the run-title regex in `plugin/server/window.ts`, and the secret names `..._<n>` | how many windows can run at once. Every slot is an identity you generate, store and pair, so keep the count small |
 | Window lifetime | `sleep 5400` in the *Steering window* step | how long the job idles before it ends. GitHub-hosted runners stop at 6 hours per job |
-| Provider | the `pi install` line and the `*_API_KEY` secrets | which model the window's agent runs on |
+| Provider | the `*_API_KEY` secrets | which model the window's agent runs on. pi ships OpenCode Zen, MiniMax, Anthropic, OpenAI, Gemini and the rest as built-in providers, each reading its own key from the environment |
 | Harness | the two `curl` URLs | the agent's instructions and its boot script |
 
 ## Security
@@ -251,4 +245,4 @@ npm test
 
 ## License
 
-There is no `LICENSE` file in this repository yet, so treat the code as all rights reserved until the author adds one. The window runs other people's code on your machine and on GitHub's runners, so read the harness and the provider packages you point it at, and their licenses, before you trust them with a repository.
+There is no `LICENSE` file in this repository yet, so treat the code as all rights reserved until the author adds one. The window runs other people's code on your machine and on GitHub's runners, so read the harness, and the pi packages it installs, before you trust them with a repository.
