@@ -28,7 +28,7 @@ A slot is a fixed identity: slot `n` always boots as `Window-n`. Five slots mean
 
 | Requirement | Notes |
 | --- | --- |
-| The [Paseo](https://paseo.sh) app and CLI, `0.12.0` or newer | the plugin declares `paseo >= 0.12.0` |
+| The [Paseo](https://paseo.sh) app and CLI | the plugin declares `paseo >= 0.12.0`, and the window installs the latest CLI itself |
 | `git` and `gh` on the daemon machine | the plugin shells out to both; `gh` must be authenticated with a token that can dispatch workflows, read the default branch and cancel runs in the offload repository |
 | A GitHub account with a fine-grained token for your target repositories | `Contents: read and write` to clone and push, `Pull requests: read` for the daemon's PR polling |
 | A static model API key | `OPENCODE_API_KEY` for OpenCode Zen, or another provider key your harness supports. It must be a static key: an OAuth credential that rotates on refresh dies inside the job |
@@ -58,16 +58,15 @@ curl -fsSL https://raw.githubusercontent.com/ilteoood/harness/main/pi-agent.sh \
   -o "$RUNNER_TEMP/pi-agent.sh"
 ```
 
-Replace both URLs with your own. The script has to run `paseo daemon` on a line of its own: the job greps for that line and fails loudly when it is gone, because the harness is what boots the daemon now. The upstream script also installs that author's personal pi packages and sets their git identity; yours should carry your own.
+Replace both URLs with your own. The script has to run `paseo daemon` on a line of its own: the job greps for that line and fails loudly when it is gone, because the harness is what boots the daemon now. The upstream script also installs that author's personal pi packages; yours should carry your own.
 
-While you are in the file, change these too:
+While you are in the file, change this:
 
 | Line | Change it to |
 | --- | --- |
-| `git config user.name "Matteo Pietro Dazzi"` | your name, it lands in every commit the window makes |
-| `git config user.email "matteopietro.dazzi@gmail.com"` | your email |
 | `pi install npm:opencode-zen-oauth@1.2.11` | your provider's package, or drop it and use a provider pi already ships |
-| `npm i -g ... @getpaseo/cli@0.12.0` | pin a newer Paseo when you want the daemon password to gate the relay path, see [Security](#security) |
+
+The install line above it stays as it is: `npm i -g --ignore-scripts @getpaseo/cli@latest @earendil-works/pi-coding-agent@latest` always takes the latest release of both, so a breaking release upstream can break a window. The run's log tail has the versions it booted.
 
 ### 3. Generate the five window identities
 
@@ -99,6 +98,8 @@ The result is a local copy per slot:
 `.secrets/` is gitignored, so the private key material cannot be committed. Keep the whole directory: the offer is derived from the identity, and it is what pairs your phone.
 
 Pair the app with each slot: open Paseo on the phone, **Settings → Add host → Paste pairing link**, and paste the `offer.url` of that slot. The app only keeps a host entry while a daemon holding that identity is live, so pair slot `n` the first time window `n` boots, or boot a daemon from that slot's copy on demand. The job pins the container hostname to `Window-<slot>`, so the entry carries that name.
+
+The phone also needs the daemon password, the same value as the `PASEO_PASSWORD` secret. From Paseo 0.13.0 the relay refuses a client that sends no password, and the window's daemon has one, so enter it in the host entry.
 
 ### 4. Upload the secrets to the fork
 
@@ -185,7 +186,7 @@ gh workflow run window-loop.yml --repo <you>/paseo-pi-actions \
 - Checks out `feature/window-<slot>`, creating it when it is missing.
 - Installs a `post-commit` hook that pushes that branch after every commit. The hook refuses to push the default branch.
 - Runs the daemon's `gh` against that token, so the app can poll pull requests. The credential has to be in the daemon's environment, which is why the job exports `GH_TOKEN` to the harness rather than only to the job.
-- Leaves the commits with the git identity the workflow configures, so change it in step 2.
+- Authors the commits with the git identity the harness set up. This repository does not bake one in.
 
 Nothing else survives the job. GitHub-hosted runners are destroyed when the job ends, without a shutdown hook, so only what the agent pushed is left behind. Steer the window to wrap up and push before the job ends.
 
@@ -197,12 +198,11 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 | Window lifetime | `sleep 5400` in the *Steering window* step | how long the job idles before it ends. GitHub-hosted runners stop at 6 hours per job |
 | Provider | the `pi install` line and the `*_API_KEY` secrets | which model the window's agent runs on |
 | Harness | the two `curl` URLs | the agent's instructions and its boot script |
-| Commit identity | the `git config` lines in *Prepare the target repo* | who the window's commits are authored by |
 
 ## Security
 
 - **A pairing offer is a bearer credential.** It carries the daemon's public key, and anyone holding it can drive that daemon: a terminal, the target token, the model key, the private identity key. Treat `offer.url` and `relay-uri` like passwords. They belong in your local copy and in your phone, never in an issue, a run log, an artifact or a dispatch input.
-- **On Paseo 0.12.0 the relay admits a credential-less client as owner.** The workflow pins `@getpaseo/cli@0.12.0`, where the password is optional on the relay path. Set `PASEO_PASSWORD` anyway, and pin a newer Paseo CLI in the job to make the password mandatory.
+- **A credential-less relay client used to be admitted as owner.** Paseo 0.13.0 dropped that compat shim: the relay now refuses a client that sends no password. The job installs the latest CLI and the window's daemon runs with `PASEO_PASSWORD`, so the phone has to present the same password.
 - **Run logs of a public repository are world-readable.** The job never prints the offer, and it fails the run when the restored keypair does not match the keypair schema, so a broken secret surfaces immediately instead of booting an unpaired daemon.
 - **Rotate, do not repair.** A leaked token or a leaked identity is replaced by overwriting the secret and generating a new identity. There is no revocation surface for a paired identity.
 - **The target token is the blast radius.** Its repository allowlist is the only thing that decides which repositories a window can write to, so scope it to the repositories you want a window to touch.
