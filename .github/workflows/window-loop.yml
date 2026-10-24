@@ -69,13 +69,23 @@ jobs:
       - name: Restore the daemon identity
         env:
           SERVER_ID_B64: ${{ secrets[format('PASEO_SERVER_ID_B64_{0}', inputs.slot)] }}
-          KEYPAIR_B64: ${{ secrets[format('PASEO_DAMON_KEYPAIR_B64_{0}', inputs.slot)] }}
+          KEYPAIR_B64: ${{ secrets[format('PASEO_DAEMON_KEYPAIR_B64_{0}', inputs.slot)] }}
         run: |
           set -euo pipefail
+          if [ -z "$SERVER_ID_B64" ] || [ -z "$KEYPAIR_B64" ]; then
+            echo "::error::window slot ${{ inputs.slot }} has no stored daemon identity"
+            exit 1
+          fi
           mkdir -p "$HOME/.paseo" && chmod 700 "$HOME/.paseo"
           printf '%s' "$SERVER_ID_B64" | base64 -d > "$HOME/.paseo/server-id"
           printf '%s' "$KEYPAIR_B64" | base64 -d > "$HOME/.paseo/daemon-keypair.json"
           chmod 600 "$HOME/.paseo/server-id" "$HOME/.paseo/daemon-keypair.json"
+          python3 - "$HOME/.paseo/daemon-keypair.json" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1]))
+          if not payload.get("publicKeyB64"):
+              raise SystemExit("the restored daemon keypair carries no public key")
+          PY
 
       - name: Generate the pi config
         run: |
@@ -155,6 +165,11 @@ jobs:
           for _ in $(seq 1 120); do grep -q "relay_control_connected" "$HOME/daemon.log" && break; sleep 1; done
           grep -q "relay_control_connected" "$HOME/daemon.log" || { echo "::error::relay never connected"; exit 1; }
           relayed=$(python3 -c 'import time;print(int(time.time()*1000))')
+
+          if grep -q "Failed to load daemon keypair, regenerating" "$HOME/daemon.log"; then
+            echo "::error::slot ${{ inputs.slot }} booted on a fresh keypair; its paired offer no longer matches"
+            exit 1
+          fi
 
           echo "listen latency: $((listening - start)) ms"
           echo "relay latency:  $((relayed - start)) ms"
