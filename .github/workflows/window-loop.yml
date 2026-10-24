@@ -31,8 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: node:24-bookworm
-      options: --user root
-    timeout-minutes: 150
+      options: --user root --hostname Window-${{ inputs.slot }}
     steps:
       - name: Install paseo and pi
         run: |
