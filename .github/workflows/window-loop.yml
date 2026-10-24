@@ -36,8 +36,7 @@ jobs:
       - name: Install paseo and pi
         run: |
           set -euo pipefail
-          npm i -g --ignore-scripts @getpaseo/cli@0.12.0 @earendil-works/pi-coding-agent@1.4.0
-          pi install npm:opencode-zen-oauth@1.2.11
+          npm i -g --ignore-scripts @getpaseo/cli@latest @earendil-works/pi-coding-agent@latest
           pi --version
           paseo --version
 
@@ -148,8 +147,6 @@ jobs:
           target="$RUNNER_TEMP/target/$TARGET_REPO"
           mkdir -p "$(dirname "$target")"
           git clone --quiet "https://x-access-token:${TARGET_REPO_TOKEN}@github.com/${TARGET_REPO}.git" "$target"
-          git -C "$target" config user.name "Matteo Pietro Dazzi"
-          git -C "$target" config user.email "matteopietro.dazzi@gmail.com"
 
           probe_started=$(python3 -c 'import time;print(int(time.time()*1000))')
           git -C "$target" push --dry-run origin "HEAD:refs/heads/paseo-probe"
