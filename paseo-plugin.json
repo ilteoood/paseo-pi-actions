@@ -3,6 +3,6 @@
   "name": "Offload window",
   "description": "Dispatch and tear down a pi window in GitHub Actions for the workspace you are in.",
   "requirements": {
-    "paseo": ">=0.12.0"
+    "paseo": ">=0.13.0"
   }
 }

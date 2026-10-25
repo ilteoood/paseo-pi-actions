@@ -3,11 +3,33 @@ name: plugin
 on:
   push:
     paths:
-      - "plugin/**"
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "test/**"
+      - "scripts/**"
+      - "index.client.tsx"
+      - "index.server.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "paseo-plugin.json"
+      - "tsconfig.json"
+      - "tsconfig.server.json"
       - ".github/workflows/plugin.yml"
   pull_request:
     paths:
-      - "plugin/**"
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "test/**"
+      - "scripts/**"
+      - "index.client.tsx"
+      - "index.server.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "paseo-plugin.json"
+      - "tsconfig.json"
+      - "tsconfig.server.json"
       - ".github/workflows/plugin.yml"
 
 jobs:
@@ -26,3 +48,5 @@ jobs:
       - run: npm run typecheck
 
       - run: npm test
+
+      - run: bash -n scripts/window-identities.sh

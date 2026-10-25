@@ -1,45 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type PluginWorkspacePanelProps,
+  getPaseoClient,
+  useHosts,
   useRpc,
   useSettings,
   useWorkspace,
 } from "@getpaseo/plugin/client";
 import { ExternalLink } from "@getpaseo/plugin/client/ui";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { ScrollView } from "@getpaseo/plugin/client/react-native";
-import {
-  WINDOW_SLOTS,
-  windowStartRpc,
-  windowStatusRpc,
-  windowStopRpc,
-} from "../shared/window";
+import { ScrollView, copyText } from "@getpaseo/plugin/client/react-native";
+import { windowPairingRpc, windowSlotStopRpc, windowStartRpc, windowStatusRpc, windowStopRpc } from "../shared/window";
+import { type RowAction, windowRows } from "./windowRows";
 import { offloadSettings } from "../shared/settings";
 
-function readableStatus(status: string): string {
-  if (status === "in_progress") {
-    return "Running";
-  }
-  if (status === "dispatching") {
-    return "Starting";
-  }
-  if (status === "not_paired") {
-    return "Not paired";
-  }
-  if (status === "local") {
-    return "Local";
-  }
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
-
-export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspacePanelProps) {
+export function WindowPanel({ theme, layout, workspaceId, host, navigation }: PluginWorkspacePanelProps) {
   const directory = useWorkspace(workspaceId, (workspace) => workspace.directory) ?? "";
   const settings = useSettings(offloadSettings);
+  const hosts = useHosts();
   const callStatus = useRpc(windowStatusRpc);
   const callStart = useRpc(windowStartRpc);
   const callStop = useRpc(windowStopRpc);
+  const callSlotStop = useRpc(windowSlotStopRpc);
+  const callPairing = useRpc(windowPairingRpc);
   const queryClient = useQueryClient();
+  const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   const status = useQuery({
     queryKey: ["offload-window", workspaceId],
@@ -51,43 +37,74 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["offload-window", workspaceId] });
   const start = useMutation({ mutationFn: () => callStart({ directory }), onSettled: refresh });
   const stop = useMutation({ mutationFn: () => callStop({}), onSettled: refresh });
+  const turnDown = useMutation({
+    mutationFn: (slot: number) => callSlotStop({ slot }),
+    onSettled: refresh,
+  });
+  const pair = useMutation({
+    mutationFn: async (slot: number) => {
+      const { relayUri } = await callPairing({ slot });
+      await copyText(relayUri);
+      return slot;
+    },
+    onSuccess: (slot) =>
+      setNotice({
+        tone: "success",
+        text: `Copied Window ${slot}'s pairing string — paste it into Paseo's pair-device dialog.`,
+      }),
+  });
+
+  const switchToWindow = async (slot: number, repo: string) => {
+    try {
+      const client = getPaseoClient(`Window-${slot}`);
+      const { entries } = await client.workspaces.list();
+      const workspace = entries.find((entry) => entry.projectRootPath.endsWith(`/${repo}`));
+      if (!workspace) {
+        setNotice({
+          tone: "error",
+          text: `Window ${slot} has no workspace yet — it was started before this change.`,
+        });
+        return;
+      }
+      navigation?.openWorkspace({ workspaceId: workspace.id, serverId: `Window-${slot}` });
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    }
+  };
 
   const runs = status.data?.runs ?? [];
-  const slots = status.data?.slots ?? [];
   const repo = status.data?.repo ?? "";
   const defaultBranch = status.data?.defaultBranch;
-  const pending = start.isPending || stop.isPending;
+  const secrets = status.data?.secrets;
+  const materialImported = (secrets?.slots ?? 0) > 0;
+  const pending = start.isPending || stop.isPending || turnDown.isPending || pair.isPending;
   const configured = settings.status === "ready" && settings.values.repository !== "";
   const canStart = !pending && configured;
   const canStop = !pending && runs.length > 0;
-  const failure = status.error ?? start.error ?? stop.error;
+  const failure = status.error ?? start.error ?? stop.error ?? turnDown.error ?? pair.error;
 
-  const hostEntries = useMemo(() => {
-    const slotStates = new Map(slots.map((entry) => [entry.slot, entry]));
-    return [
-      {
-        serverId: host.id,
-        name: host.label,
-        detail: `Local daemon · ${host.id}`,
-        status: "local",
-        runUrl: "",
-      },
-      ...WINDOW_SLOTS.map((slot) => {
-        const serverId = `Window-${slot}`;
-        const slotState = slotStates.get(slot);
-        const occupied = slotState !== undefined && slotState.status !== "free";
-        return {
-          serverId,
-          name: `Window ${slot}`,
-          detail: occupied
-            ? `${slotState.repo} · since ${slotState.startedAt ?? "dispatch"}`
-            : `${serverId} · no active window`,
-          status: occupied ? slotState.status : "free",
-          runUrl: slotState?.url ?? "",
-        };
-      }),
-    ];
-  }, [host.id, host.label, slots]);
+  const rows = windowRows({
+    slots: status.data?.slots ?? [],
+    hosts,
+    localHost: { id: host.id, label: host.label },
+    materialImported,
+    canSwitch: navigation !== undefined,
+  });
+  const slotsByServerId = new Map((status.data?.slots ?? []).map((slot) => [`Window-${slot.slot}`, slot]));
+
+  const runAction = (serverId: string, action: RowAction) => {
+    const slot = slotsByServerId.get(serverId);
+    if (!slot) {
+      return;
+    }
+    if (action.kind === "turn-down") {
+      turnDown.mutate(slot.slot);
+    } else if (action.kind === "pair") {
+      pair.mutate(slot.slot);
+    } else {
+      void switchToWindow(slot.slot, slot.repo);
+    }
+  };
 
   const styles = useMemo(
     () => ({
@@ -112,7 +129,24 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
       },
       hostCopy: { flex: 1, gap: 4 },
       hostName: { color: theme.colors.foreground, fontWeight: "600" as const },
-      hostStatus: { color: theme.colors.foregroundMuted },
+      hostState: { color: theme.colors.foregroundMuted },
+      hostActions: {
+        flexDirection: "row" as const,
+        flexWrap: "wrap" as const,
+        gap: 8,
+        marginTop: 4,
+      },
+      rowButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface0,
+      },
+      rowButtonText: { color: theme.colors.foreground, textAlign: "center" as const },
+      rowDanger: { borderColor: theme.colors.statusDanger },
+      rowDangerText: { color: theme.colors.statusDanger },
       button: { padding: 14, borderRadius: 10, backgroundColor: theme.colors.accent },
       buttonDisabled: { opacity: 0.5 },
       buttonText: { color: theme.colors.accentForeground, textAlign: "center" as const },
@@ -123,12 +157,14 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface1,
       },
-      dangerButtonText: { color: theme.colors.foreground, textAlign: "center" as const },
+      dangerButtonText: { color: theme.colors.accentForeground, textAlign: "center" as const },
       error: { color: theme.colors.statusDanger },
       success: { color: theme.colors.statusSuccess },
     }),
     [theme, layout.compact],
   );
+
+  const noticeStyle = notice?.tone === "error" ? styles.error : styles.success;
 
   return (
     <View style={styles.screen}>
@@ -146,14 +182,44 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
         ) : null}
         <Text style={styles.heading}>Hosts</Text>
         <Text style={styles.detail}>One local daemon and five window slots.</Text>
-        {hostEntries.map((entry) => (
-          <View key={entry.serverId} style={styles.hostRow}>
+        {secrets && secrets.slots === 0 ? (
+          <Text style={styles.detail}>
+            The window identities are not imported — paste them in Settings → Plugins → Offload window.
+          </Text>
+        ) : null}
+        {rows.map((row) => (
+          <View key={row.serverId} style={styles.hostRow}>
             <View style={styles.hostCopy}>
-              <Text style={styles.hostName}>{entry.name}</Text>
-              <Text style={styles.detail}>{entry.detail}</Text>
-              {entry.runUrl ? <ExternalLink href={entry.runUrl}>Open Actions run</ExternalLink> : null}
+              <Text style={styles.hostName}>{row.name}</Text>
+              <Text style={styles.detail}>{row.detail}</Text>
+              {row.runUrl ? <ExternalLink href={row.runUrl}>Open the window job</ExternalLink> : null}
+              {row.actions.length > 0 ? (
+                <View style={styles.hostActions}>
+                  {row.actions.map((action) => (
+                    <Pressable
+                      key={action.kind}
+                      accessibilityRole="button"
+                      accessibilityLabel={action.label}
+                      accessibilityState={{ disabled: action.disabled }}
+                      disabled={action.disabled}
+                      onPress={() => runAction(row.serverId, action)}
+                      style={[
+                        styles.rowButton,
+                        action.disabled && styles.buttonDisabled,
+                        action.danger && styles.rowDanger,
+                      ]}
+                    >
+                      <Text style={[styles.rowButtonText, action.danger && styles.rowDangerText]}>
+                        {action.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
             </View>
-            <Text style={styles.hostStatus}>{readableStatus(entry.status)}</Text>
+            <Text style={styles.hostState}>
+              {row.hostStatus === null ? row.runStatus : `${row.runStatus} · ${row.hostStatus}`}
+            </Text>
           </View>
         ))}
         <Pressable
@@ -170,8 +236,7 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
         </Pressable>
         {start.data ? (
           <Text style={styles.success}>
-            Dispatched to Window {start.data.slot}. Open the {start.data.hostEntry} host entry when it
-            appears.
+            Dispatched to Window {start.data.slot}. Use Pair Window {start.data.slot} once it boots.
           </Text>
         ) : null}
         <Pressable
@@ -186,6 +251,7 @@ export function WindowPanel({ theme, layout, workspaceId, host }: PluginWorkspac
             {stop.isPending ? "Tearing down…" : "Tear down all windows"}
           </Text>
         </Pressable>
+        {notice ? <Text style={noticeStyle}>{notice.text}</Text> : null}
         {failure ? <Text style={styles.error}>{failure.message}</Text> : null}
       </ScrollView>
     </View>

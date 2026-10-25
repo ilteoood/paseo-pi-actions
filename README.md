@@ -8,8 +8,9 @@ This repository holds two things:
 
 | Path | What it is |
 | --- | --- |
-| `plugin/` | the Paseo plugin ("Offload window") that dispatches and tears down windows |
+| the repository root | the Paseo plugin ("Offload window") that dispatches, pairs and tears down windows |
 | `.github/workflows/window-loop.yml` | the window job itself |
+| `scripts/window-identities.sh` | the generator for the five window identities and their pairing material |
 
 The plugin runs on your **daemon machine**. The job runs on a **GitHub-hosted runner**. Your **target repository** carries no offload files at all: the clone happens on the runner.
 
@@ -28,7 +29,7 @@ A slot is a fixed identity: slot `n` always boots as `Window-n`. Five slots mean
 
 | Requirement | Notes |
 | --- | --- |
-| The [Paseo](https://paseo.sh) app and CLI | the plugin declares `paseo >= 0.12.0`, and the window installs the latest CLI itself |
+| The [Paseo](https://paseo.sh) app and CLI | the plugin declares `paseo >= 0.13.0`, and the window installs the latest CLI itself |
 | `git` and `gh` on the daemon machine | the plugin shells out to both; `gh` must be authenticated with a token that can dispatch workflows, read the default branch and cancel runs in the offload repository |
 | A GitHub account with a fine-grained token for your target repositories | `Contents: read and write` to clone and push, `Pull requests: read` for the daemon's PR polling |
 | A static model API key | `OPENCODE_API_KEY` for OpenCode Zen, which pi ships as a built-in provider, or a key for any other provider pi ships. It must be a static key: an OAuth credential that rotates on refresh dies inside the job |
@@ -64,29 +65,20 @@ Nothing else in the job needs changing. It installs paseo and pi at their latest
 
 ### 3. Generate the five window identities
 
-Each slot needs its own daemon identity: a server id and a keypair. Generate them once, locally, in a scratch home per slot. `PASEO_SERVER_ID` pins the id, which is what makes the app show `Window-1` through `Window-5`. Run this from the repository root.
+Each slot needs its own daemon identity: a server id and a keypair. Generate them once, locally, in a scratch home per slot. `PASEO_SERVER_ID` pins the id, which is what makes the app show `Window-1` through `Window-5`. The script asks for the daemon password, the same value as the `PASEO_PASSWORD` secret, and reads it without echoing it, so it never enters the shell history.
 
 ```bash
-for slot in 1 2 3 4 5; do
-  identity="$PWD/.secrets/window-identities/slot-$slot"
-  home="$PWD/.secrets/window-identities/.home-$slot"
-  mkdir -p "$home" "$identity" && chmod 700 "$home" "$identity"
-  PASEO_SERVER_ID="Window-$slot" paseo daemon pair --relay --home "$home" --json > "$home/pair.json"
-  cp "$home/server-id" "$home/daemon-keypair.json" "$identity/"
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$home/pair.json" > "$identity/offer.url"
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["connectionUri"])' "$home/pair.json" > "$identity/relay-uri"
-  chmod 600 "$identity"/*
-  rm -rf "$home"
-done
+scripts/window-identities.sh
 ```
 
-The result is a local copy per slot:
+The result is a local copy per slot, plus the material the plugin hands to a client:
 
 ```
 .secrets/window-identities/slot-1/server-id          # Window-1
 .secrets/window-identities/slot-1/daemon-keypair.json # the private half, never leaves your machine
 .secrets/window-identities/slot-1/offer.url           # the pairing offer, a secret
 .secrets/window-identities/slot-1/relay-uri           # the same offer in relay form
+.secrets/offload-secrets.json                         # all five slots on one line, the password included
 ```
 
 `.secrets/` is gitignored, so the private key material cannot be committed. Keep the whole directory: the offer is derived from the identity, and it is what pairs your phone.
@@ -129,13 +121,13 @@ A repository secret can be overwritten but never read back. Keep the local copy 
 Plugins are trusted, unsandboxed code: the backend half runs on the daemon host with access to your files, processes and credentials. The plugin needs `git` and `gh`, and it reads and writes GitHub on your behalf. Install it only if that is what you want.
 
 ```bash
-paseo plugin install github:<you>/paseo-pi-actions:plugin
+paseo plugin install github:<you>/paseo-pi-actions
 ```
 
 or, from a local checkout:
 
 ```bash
-paseo plugin install /absolute/path/to/paseo-pi-actions/plugin
+paseo plugin install /absolute/path/to/paseo-pi-actions
 ```
 
 The daemon refuses to load plugins until the global switch is on. `paseo daemon status --json` prints the daemon home; check that home's `config.json` for `"pluginsEnabled": true`, or flip it in **Settings → Plugins → Enable plugins** on the daemon machine, then:
@@ -151,6 +143,10 @@ The plugin's runtime dependencies (`zod`, `react`, `react-native`, `@tanstack/re
 ### 6. Point the plugin at the offload repository
 
 In the app: **Settings → Plugins → Offload window**, set **Offload repository** to `owner/repo` of your fork. The plugin dispatches `window-loop.yml` there, reads its run list to decide which slots are busy, and cancels its runs when you tear down.
+
+The same screen has **Window identities**. Paste the contents of `.secrets/offload-secrets.json` and press **Import**. The file is one line, so it pastes into the field as it is. The plugin validates the whole paste — one entry per slot, a relay URI, an offer URL and a password each — and keeps it at `~/.paseo/plugin-settings/paseo-offload/offload-secrets.json`, mode 0600, outside the repository. The settings JSON never holds it, and a malformed paste writes nothing.
+
+Without that material the panel cannot pair a client with a window: the **Pair Window N** button stays disabled and the panel says the identities are not imported.
 
 ### 7. Authenticate `gh` on the daemon machine
 
@@ -188,15 +184,16 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 
 | Knob | Where | Effect |
 | --- | --- | --- |
-| Slot count | `WINDOW_SLOTS` in `plugin/shared/window.ts`, the slot `choice` in `window-loop.yml`, the run-title regex in `plugin/server/window.ts`, and the secret names `..._<n>` | how many windows can run at once. Every slot is an identity you generate, store and pair, so keep the count small |
+| Slot count | `WINDOW_SLOTS` in `shared/window.ts`, the slot `choice` in `window-loop.yml`, the run-title regex in `server/window.ts`, and the secret names `..._<n>` | how many windows can run at once. Every slot is an identity you generate, store and pair, so keep the count small |
 | Window lifetime | `sleep 5400` in the *Steering window* step | how long the job idles before it ends. GitHub-hosted runners stop at 6 hours per job |
 | Provider | the `*_API_KEY` secrets | which model the window's agent runs on. pi ships OpenCode Zen, MiniMax, Anthropic, OpenAI, Gemini and the rest as built-in providers, each reading its own key from the environment |
 | Harness | the two `curl` URLs | the agent's instructions and its boot script |
 
 ## Security
 
-- **A pairing offer is a bearer credential.** It carries the daemon's public key, and anyone holding it can drive that daemon: a terminal, the target token, the model key, the private identity key. Treat `offer.url` and `relay-uri` like passwords. They belong in your local copy and in your phone, never in an issue, a run log, an artifact or a dispatch input.
+- **The daemon password is the load-bearing secret.** A pairing offer carries the daemon's public key and names the endpoint and the server id; from Paseo 0.13.0 the relay refuses a client that sends no password, so the offer alone no longer drives the daemon. The password belongs in your local copy, in the imported material and in your phone, never in an issue, a run log, an artifact or a dispatch input.
 - **A credential-less relay client used to be admitted as owner.** Paseo 0.13.0 dropped that compat shim: the relay now refuses a client that sends no password. The job installs the latest CLI and the window's daemon runs with `PASEO_PASSWORD`, so the phone has to present the same password.
+- **The pairing string passes through the system clipboard.** The Pair button copies `relay://…&password=…` so you can paste it into Paseo's pair-device dialog; until something else overwrites the clipboard, any app on that machine can read it. Clear the clipboard after pairing on a shared machine.
 - **Run logs of a public repository are world-readable.** The job never prints the offer, and it fails the run when the restored keypair does not match the keypair schema, so a broken secret surfaces immediately instead of booting an unpaired daemon.
 - **Rotate, do not repair.** A leaked token or a leaked identity is replaced by overwriting the secret and generating a new identity. There is no revocation surface for a paired identity.
 - **The target token is the blast radius.** Its repository allowlist is the only thing that decides which repositories a window can write to, so scope it to the repositories you want a window to touch.
@@ -215,33 +212,36 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 | `the daemon never started` | the harness died before booting Paseo | the run's daemon log tail has the harness output |
 | `<remote> is not a GitHub remote` | the workspace's `origin` is not a GitHub URL | the plugin only supports GitHub remotes |
 | the window is invisible in the app | the phone never paired that slot | paste that slot's `offer.url` into the app |
+| `the window identities are not imported` | the material was never pasted | Settings → Plugins → Offload window → Window identities |
+| `slots[2].relayUri must start with relay://` | the pasted material is incomplete or malformed | re-run `scripts/window-identities.sh` and paste the file again |
 
 ## Repository layout
 
 ```
 .github/workflows/window-loop.yml   the window job, the file your fork dispatches
 .github/workflows/plugin.yml        typecheck and tests for the plugin
-plugin/paseo-plugin.json            the plugin manifest, its id and its Paseo requirement
-plugin/index.server.ts              the daemon-side RPC handlers
-plugin/server/window.ts             slot picking, the gh dispatch, the teardown
-plugin/index.client.tsx             the panel, the settings screen, the command center item
-plugin/client/window.tsx            the workspace panel
-plugin/client/settings.tsx          the settings screen
-plugin/shared/window.ts             the RPC contracts and WINDOW_SLOTS
-plugin/shared/settings.ts           the settings schema
-plugin/test/window.test.ts          the tests
+paseo-plugin.json                   the plugin manifest, its id and its Paseo requirement
+index.server.ts                     the daemon-side RPC handlers
+server/window.ts                    slot picking, the gh dispatch, the teardown
+server/secrets.ts                   the imported window identities and the pairing string
+index.client.tsx                    the panel, the settings screen, the command center item
+client/window.tsx                   the workspace panel
+client/settings.tsx                 the settings screen
+shared/window.ts                    the RPC contracts and WINDOW_SLOTS
+shared/settings.ts                  the settings schema
+scripts/window-identities.sh        the identity generator and the material file
+test/window.test.ts                 the tests
 ```
 
 ## Development
 
 ```bash
-cd plugin
 npm ci
 npm run typecheck
 npm test
 ```
 
-`.github/workflows/plugin.yml` runs the same two commands on every push and pull request that touches `plugin/`. It needs no secrets.
+Run them from the repository root. `.github/workflows/plugin.yml` runs the same commands on every push and pull request that touches the plugin's sources, the manifest, or the identity generator, and syntax-checks `scripts/window-identities.sh`. It needs no secrets.
 
 ## License
 

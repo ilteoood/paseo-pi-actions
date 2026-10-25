@@ -1,7 +1,15 @@
 import type { PluginServerContext, PluginSettings } from "@getpaseo/plugin/server";
-import { startWindow, stopWindows, windowStatus } from "./server/window";
+import { startWindow, stopSlot, stopWindows, windowStatus } from "./server/window";
+import { importMaterial, pairingString } from "./server/secrets";
 import { offloadSettings } from "./shared/settings";
-import { windowStartRpc, windowStatusRpc, windowStopRpc } from "./shared/window";
+import {
+  windowPairingRpc,
+  windowSecretsImportRpc,
+  windowSlotStopRpc,
+  windowStartRpc,
+  windowStatusRpc,
+  windowStopRpc,
+} from "./shared/window";
 
 type OffloadSettings = PluginSettings<typeof offloadSettings.schema>;
 
@@ -19,6 +27,11 @@ export default function contribute(server: PluginServerContext): () => void {
     startWindow(directory, await configuredRepository(settings)),
   );
   server.handle(windowStopRpc, async () => stopWindows(await configuredRepository(settings)));
+  server.handle(windowSlotStopRpc, async ({ slot }) =>
+    stopSlot(await configuredRepository(settings), slot),
+  );
+  server.handle(windowPairingRpc, async ({ slot }) => ({ relayUri: pairingString(slot) }));
+  server.handle(windowSecretsImportRpc, async ({ material }) => importMaterial(material));
 
   return () => {};
 }
