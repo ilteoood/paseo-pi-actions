@@ -1,6 +1,7 @@
 import {
   type PluginSurfaceProps,
   type SettingsState,
+  useRpc,
   useSettings,
 } from "@getpaseo/plugin/client";
 import {
@@ -12,6 +13,7 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { Text } from "react-native";
 import { offloadSettings } from "../shared/settings";
+import { windowSecretsImportRpc } from "../shared/window";
 
 type ReadySettings = Extract<SettingsState<typeof offloadSettings.schema>, { status: "ready" }>;
 
@@ -54,8 +56,51 @@ function RepositoryEditor({ settings, onClose }: { settings: ReadySettings; onCl
     </SettingsCard>
   );
 }
+function WindowIdentities({ theme }: Pick<PluginSurfaceProps, "theme">) {
+  const callImport = useRpc(windowSecretsImportRpc);
+  const [material, setMaterial] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const style = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
 
-export function OffloadSettings({ theme }: PluginSurfaceProps) {
+  const importIdentities = useCallback(async () => {
+    setBusy(true);
+    try {
+      const status = await callImport({ material });
+      setMaterial("");
+      setResult({ tone: "success", text: `Imported the window identities for ${status.slots} windows.` });
+    } catch (error) {
+      setResult({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(false);
+    }
+  }, [callImport, material]);
+
+  return (
+    <SettingsCard>
+      <SettingsInput
+        label="Window identities"
+        hint="the .secrets.json printed by scripts/window-identities.sh"
+        placeholder="[{ … }]"
+        initialValue={material}
+        onChangeText={setMaterial}
+        disabled={busy}
+        secureTextEntry
+        error={result?.tone === "error" ? result.text : undefined}
+      />
+      <SettingsAction
+        label="Import the window identities"
+        actionLabel={busy ? "Importing…" : "Import"}
+        disabled={busy || material.trim() === ""}
+        onPress={importIdentities}
+      />
+      {result?.tone === "success" ? <Text style={style}>{result.text}</Text> : null}
+    </SettingsCard>
+  );
+}
+
+
+function RepositorySection({ theme }: Pick<PluginSurfaceProps, "theme">) {
   const settings = useSettings(offloadSettings);
   const style = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
   const [editing, setEditing] = useState(false);
@@ -66,7 +111,11 @@ export function OffloadSettings({ theme }: PluginSurfaceProps) {
   const toggleEditor = useCallback(() => setEditing((value) => !value), []);
 
   if (settings.status === "loading") {
-    return <Text style={style}>Loading settings…</Text>;
+    return (
+      <SettingsSection title="Offload">
+        <Text style={style}>Loading settings…</Text>
+      </SettingsSection>
+    );
   }
   if (settings.status !== "ready") {
     return (
@@ -107,5 +156,19 @@ export function OffloadSettings({ theme }: PluginSurfaceProps) {
         </Text>
       ) : null}
     </SettingsSection>
+  );
+}
+
+export function OffloadSettings({ theme }: PluginSurfaceProps) {
+  return (
+    <>
+      <RepositorySection theme={theme} />
+      <SettingsSection
+        title="Window identities"
+        info="The pairing material the panel hands to a client that pairs with a window."
+      >
+        <WindowIdentities theme={theme} />
+      </SettingsSection>
+    </>
   );
 }

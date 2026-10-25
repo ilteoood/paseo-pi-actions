@@ -2,7 +2,7 @@ version: 2
 
 updates:
   - package-ecosystem: "npm"
-    directory: "/plugin"
+    directory: "/"
     schedule:
       interval: "daily"
       time: "06:00"

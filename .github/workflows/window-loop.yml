@@ -184,6 +184,7 @@ jobs:
         run: |
           set -euo pipefail
           paseo project create "$TARGET_PATH"
+          paseo workspace create --isolation local --path "$TARGET_PATH"
           paseo project ls
 
       - name: Steering window
