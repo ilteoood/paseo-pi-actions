@@ -13,9 +13,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: plugin
+
     steps:
       - uses: actions/checkout@v4
 
