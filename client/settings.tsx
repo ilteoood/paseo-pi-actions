@@ -9,6 +9,7 @@ import {
   SettingsCard,
   SettingsInput,
   SettingsSection,
+  useToast,
 } from "@getpaseo/plugin/client/ui";
 import { useCallback, useMemo, useState } from "react";
 import { Text } from "react-native";
@@ -56,25 +57,25 @@ function RepositoryEditor({ settings, onClose }: { settings: ReadySettings; onCl
     </SettingsCard>
   );
 }
-function WindowIdentities({ theme }: Pick<PluginSurfaceProps, "theme">) {
+function WindowIdentities() {
+  const toast = useToast();
   const callImport = useRpc(windowSecretsImportRpc);
   const [material, setMaterial] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ tone: "success" | "error"; text: string } | null>(null);
-  const style = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
-
+  const [error, setError] = useState<string | null>(null);
   const importIdentities = useCallback(async () => {
     setBusy(true);
     try {
       const status = await callImport({ material });
       setMaterial("");
-      setResult({ tone: "success", text: `Imported the window identities for ${status.slots} windows.` });
-    } catch (error) {
-      setResult({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setError(null);
+      toast.show(`Imported the window identities for ${status.slots} windows.`, { variant: "success" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setBusy(false);
     }
-  }, [callImport, material]);
+  }, [callImport, material, toast]);
 
   return (
     <SettingsCard>
@@ -86,7 +87,7 @@ function WindowIdentities({ theme }: Pick<PluginSurfaceProps, "theme">) {
         onChangeText={setMaterial}
         disabled={busy}
         secureTextEntry
-        error={result?.tone === "error" ? result.text : undefined}
+        error={error}
       />
       <SettingsAction
         label="Import the window identities"
@@ -94,11 +95,9 @@ function WindowIdentities({ theme }: Pick<PluginSurfaceProps, "theme">) {
         disabled={busy || material.trim() === ""}
         onPress={importIdentities}
       />
-      {result?.tone === "success" ? <Text style={style}>{result.text}</Text> : null}
     </SettingsCard>
   );
 }
-
 
 function RepositorySection({ theme }: Pick<PluginSurfaceProps, "theme">) {
   const settings = useSettings(offloadSettings);
@@ -167,7 +166,7 @@ export function OffloadSettings({ theme }: PluginSurfaceProps) {
         title="Window identities"
         info="The pairing material the panel hands to a client that pairs with a window."
       >
-        <WindowIdentities theme={theme} />
+        <WindowIdentities />
       </SettingsSection>
     </>
   );
