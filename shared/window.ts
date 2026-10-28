@@ -11,6 +11,14 @@ export function relayHostName(relayUri: string): string | null {
   return relayHostPattern.exec(relayUri)?.[1] ?? null;
 }
 
+export function windowHostRegistration(slot: number, relayUri: string) {
+  return {
+    connection: relayUri,
+    label: `Window-${slot}`,
+    sourceKey: `offload-window-${slot}`,
+  };
+}
+
 export const windowMaterial = z
   .object({
     slot: windowSlot,

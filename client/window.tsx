@@ -3,15 +3,22 @@ import {
   type PluginWorkspacePanelProps,
   getPaseoClient,
   useHosts,
+  usePaseo,
   useRpc,
   useSettings,
   useWorkspace,
 } from "@getpaseo/plugin/client";
-import { ExternalLink } from "@getpaseo/plugin/client/ui";
+import { ExternalLink, ScrollView } from "@getpaseo/plugin/client/ui";
 import { useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { ScrollView, copyText } from "@getpaseo/plugin/client/react-native";
-import { windowPairingRpc, windowSlotStopRpc, windowStartRpc, windowStatusRpc, windowStopRpc } from "../shared/window";
+import {
+  windowHostRegistration,
+  windowPairingRpc,
+  windowSlotStopRpc,
+  windowStartRpc,
+  windowStatusRpc,
+  windowStopRpc,
+} from "../shared/window";
 import { type RowAction, windowRows } from "./windowRows";
 import { offloadSettings } from "../shared/settings";
 
@@ -19,6 +26,7 @@ export function WindowPanel({ theme, layout, workspaceId, host, navigation }: Pl
   const directory = useWorkspace(workspaceId, (workspace) => workspace.directory) ?? "";
   const settings = useSettings(offloadSettings);
   const hosts = useHosts();
+  const paseo = usePaseo();
   const callStatus = useRpc(windowStatusRpc);
   const callStart = useRpc(windowStartRpc);
   const callStop = useRpc(windowStopRpc);
@@ -44,13 +52,12 @@ export function WindowPanel({ theme, layout, workspaceId, host, navigation }: Pl
   const pair = useMutation({
     mutationFn: async (slot: number) => {
       const { relayUri } = await callPairing({ slot });
-      await copyText(relayUri);
-      return slot;
+      return paseo.hosts.add(windowHostRegistration(slot, relayUri));
     },
-    onSuccess: (slot) =>
+    onSuccess: (_host, slot) =>
       setNotice({
         tone: "success",
-        text: `Copied Window ${slot}'s pairing string — paste it into Paseo's pair-device dialog.`,
+        text: `Added Window ${slot} as a host — Paseo connects to it as soon as the window is up.`,
       }),
   });
 
