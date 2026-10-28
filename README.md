@@ -20,7 +20,7 @@ The plugin runs on your **daemon machine**. The job runs on a **GitHub-hosted ru
 2. The plugin reads the target repository from the workspace's `origin` remote and the **offload repository** from its settings, then picks a free slot among `1..5`.
 3. It dispatches `window-loop.yml` in the offload repository with `gh workflow run`.
 4. The job clones the target repository, restores the slot's daemon identity from repository secrets, runs your harness (which boots `paseo daemon run`), registers the clone as a Paseo project, and idles.
-5. The daemon dials the Paseo relay, the app shows a `Window-<slot>` host entry, and you steer the window.
+5. Once the job boots, **Pair Window N** adds that window to your daemon as a saved host — the `paseo host add` registration, made from the panel — and the row turns into **Switch to Window N**.
 6. *Tear down all windows* cancels the window runs of the offload repository, every target repository among them.
 
 A slot is a fixed identity: slot `n` always boots as `Window-n`. Five slots means five simultaneous windows. A sixth dispatch is refused by name, and a dispatch onto a busy slot queues behind it, because the workflow serializes each slot through the concurrency group `paseo-window-<slot>`.
@@ -146,7 +146,7 @@ In the app: **Settings → Plugins → Offload window**, set **Offload repositor
 
 The same screen has **Window identities**. Paste the contents of `.secrets/offload-secrets.json` and press **Import**. The file is one line, so it pastes into the field as it is. The plugin validates the whole paste — one entry per slot, a relay URI, an offer URL and a password each — and keeps it at `~/.paseo/plugin-settings/paseo-offload/offload-secrets.json`, mode 0600, outside the repository. The settings JSON never holds it, and a malformed paste writes nothing.
 
-Without that material the panel cannot pair a client with a window: the **Pair Window N** button stays disabled and the panel says the identities are not imported.
+Without that material the panel cannot register a window with your daemon: the **Pair Window N** button stays disabled and the panel says the identities are not imported.
 
 ### 7. Authenticate `gh` on the daemon machine
 
@@ -193,7 +193,7 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 
 - **The daemon password is the load-bearing secret.** A pairing offer carries the daemon's public key and names the endpoint and the server id; from Paseo 0.13.0 the relay refuses a client that sends no password, so the offer alone no longer drives the daemon. The password belongs in your local copy, in the imported material and in your phone, never in an issue, a run log, an artifact or a dispatch input.
 - **A credential-less relay client used to be admitted as owner.** Paseo 0.13.0 dropped that compat shim: the relay now refuses a client that sends no password. The job installs the latest CLI and the window's daemon runs with `PASEO_PASSWORD`, so the phone has to present the same password.
-- **The pairing string passes through the system clipboard.** The Pair button copies `relay://…&password=…` so you can paste it into Paseo's pair-device dialog; until something else overwrites the clipboard, any app on that machine can read it. Clear the clipboard after pairing on a shared machine.
+- **The pairing string lands in the daemon's host file.** The Pair button hands `relay://…&password=…` to the daemon's `hosts.add`, the same call `paseo host add` makes, so the connection string is stored in the daemon home's `hosts.json`, mode 0600, and never passes through the clipboard. Removing the host in the app deletes that entry.
 - **Run logs of a public repository are world-readable.** The job never prints the offer, and it fails the run when the restored keypair does not match the keypair schema, so a broken secret surfaces immediately instead of booting an unpaired daemon.
 - **Rotate, do not repair.** A leaked token or a leaked identity is replaced by overwriting the secret and generating a new identity. There is no revocation surface for a paired identity.
 - **The target token is the blast radius.** Its repository allowlist is the only thing that decides which repositories a window can write to, so scope it to the repositories you want a window to touch.
@@ -211,7 +211,7 @@ Nothing else survives the job. GitHub-hosted runners are destroyed when the job 
 | `the relay never connected` | the daemon never reached the relay | check the daemon log tail in the run, and that `PASEO_PASSWORD` is set |
 | `the daemon never started` | the harness died before booting Paseo | the run's daemon log tail has the harness output |
 | `<remote> is not a GitHub remote` | the workspace's `origin` is not a GitHub URL | the plugin only supports GitHub remotes |
-| the window is invisible in the app | the phone never paired that slot | paste that slot's `offer.url` into the app |
+| the window is invisible in the app | that slot was never added as a host | press **Pair Window N** in the panel, or paste that slot's `offer.url` into the app |
 | `the window identities are not imported` | the material was never pasted | Settings → Plugins → Offload window → Window identities |
 | `slots[2].relayUri must start with relay://` | the pasted material is incomplete or malformed | re-run `scripts/window-identities.sh` and paste the file again |
 

@@ -16,6 +16,7 @@ import { importMaterial, parseMaterial, pairingString, secretsStatus } from "../
 import { type SlotState, windowRows } from "../client/windowRows.ts";
 import type { PluginHostSummary } from "@getpaseo/plugin/client";
 import { offloadSettings } from "../shared/settings.ts";
+import { windowHostRegistration } from "../shared/window.ts";
 
 function windowRun(slot: number, repo: string): WindowRun {
   return {
@@ -214,6 +215,18 @@ test("keeps the imported material at 0600 and hands out one pairing string", () 
       process.env.HOME = previous;
     }
   }
+});
+
+test("registers a window as a host under its own name and a stable source key", () => {
+  const relayUri = "relay://relay.paseo.sh:443/Window-2?key=key-2&ssl=true&password=secret";
+  const registration = windowHostRegistration(2, relayUri);
+  assert.deepEqual(registration, {
+    connection: relayUri,
+    label: "Window-2",
+    sourceKey: "offload-window-2",
+  });
+  assert.deepEqual(windowHostRegistration(2, relayUri), registration);
+  assert.notEqual(windowHostRegistration(3, relayUri).sourceKey, registration.sourceKey);
 });
 
 function slotState(overrides: Partial<SlotState> = {}): SlotState {
